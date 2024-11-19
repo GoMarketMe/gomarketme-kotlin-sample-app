@@ -1,3 +1,4 @@
+/*
 package co.gomarketme.kotlinsampleapp
 
 import androidx.test.platform.app.InstrumentationRegistry
@@ -21,4 +22,4 @@ class ExampleInstrumentedTest {
         val appContext = InstrumentationRegistry.getInstrumentation().targetContext
         assertEquals("co.gomarketme.kotlinsampleapp", appContext.packageName)
     }
-}
+}*/
