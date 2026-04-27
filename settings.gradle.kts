@@ -6,8 +6,8 @@ pluginManagement {
         gradlePluginPortal()
     }
     plugins {
-        id("com.android.application") version "8.6.1"
-        id("org.jetbrains.kotlin.android") version "1.9.10"
+        id("com.android.application") version "9.2.0"
+        id("org.jetbrains.kotlin.android") version "2.2.10"
     }
 }
 

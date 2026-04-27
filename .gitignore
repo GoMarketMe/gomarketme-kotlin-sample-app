@@ -14,3 +14,21 @@
 .cxx
 local.properties
 *.jks
+
+# Android Studio / IntelliJ local project files
+.idea/
+*.iml
+
+# Gradle local/cache files
+.gradle/
+build/
+*/build/
+
+# Android generated/local files
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+
+# macOS
+.DS_Store

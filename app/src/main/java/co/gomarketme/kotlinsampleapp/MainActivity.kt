@@ -5,17 +5,37 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import co.gomarketme.kotlinsampleapp.ui.theme.KotlinSampleAppTheme
-import com.android.billingclient.api.*
 import co.gomarketme.kotlin.GoMarketMe
+import co.gomarketme.kotlin.GoMarketMeAffiliateMarketingData
+import co.gomarketme.kotlinsampleapp.ui.theme.KotlinSampleAppTheme
+import com.android.billingclient.api.AcknowledgePurchaseParams
+import com.android.billingclient.api.BillingClient
+import com.android.billingclient.api.BillingClientStateListener
+import com.android.billingclient.api.BillingFlowParams
+import com.android.billingclient.api.BillingResult
+import com.android.billingclient.api.ConsumeParams
+import com.android.billingclient.api.PendingPurchasesParams
+import com.android.billingclient.api.Purchase
+import com.android.billingclient.api.PurchasesUpdatedListener
+import com.android.billingclient.api.QueryProductDetailsParams
+import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity(), PurchasesUpdatedListener {
     private lateinit var billingClient: BillingClient
@@ -23,38 +43,66 @@ class MainActivity : ComponentActivity(), PurchasesUpdatedListener {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Initialize GoMarketMe SDK
+        // Initialize GoMarketMe SDK.
+        // Replace API_KEY with your actual GoMarketMe API key.
         GoMarketMe.initialize(this, "API_KEY")
 
         enableEdgeToEdge()
 
-        // Initialize BillingClient
         billingClient = BillingClient.newBuilder(this)
             .setListener(this)
-            .enablePendingPurchases()
+            .enablePendingPurchases(
+                PendingPurchasesParams.newBuilder()
+                    .enableOneTimeProducts()
+                    .build()
+            )
+            .enableAutoServiceReconnection()
             .build()
 
-        // Connect to Google Play Billing
         billingClient.startConnection(object : BillingClientStateListener {
             override fun onBillingSetupFinished(billingResult: BillingResult) {
                 if (billingResult.responseCode == BillingClient.BillingResponseCode.OK) {
-                    Toast.makeText(this@MainActivity, "Billing Client Ready", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Billing Client Ready",
+                        Toast.LENGTH_SHORT
+                    ).show()
                 } else {
-                    Toast.makeText(this@MainActivity, "Error: ${billingResult.debugMessage}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Error: ${billingResult.debugMessage}",
+                        Toast.LENGTH_SHORT
+                    ).show()
                 }
             }
 
             override fun onBillingServiceDisconnected() {
-                Toast.makeText(this@MainActivity, "Billing Client Disconnected", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    this@MainActivity,
+                    "Billing Client Disconnected",
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         })
 
         setContent {
             KotlinSampleAppTheme {
+                val affiliateData = remember {
+                    mutableStateOf<GoMarketMeAffiliateMarketingData?>(null)
+                }
+
+                LaunchedEffect(Unit) {
+                    // GoMarketMe.initialize(...) runs asynchronously.
+                    // For this sample app, wait briefly before reading the data.
+                    delay(3000)
+                    affiliateData.value = GoMarketMe.affiliateMarketingData
+                }
+
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     MainContent(
                         modifier = Modifier.padding(innerPadding),
-                        onBuyButtonClick = { initiatePurchase("productid3") }
+                        affiliateData = affiliateData,
+                        onBuyButtonClick = { initiatePurchase("productid4") }
                     )
                 }
             }
@@ -62,6 +110,11 @@ class MainActivity : ComponentActivity(), PurchasesUpdatedListener {
     }
 
     private fun initiatePurchase(productId: String) {
+        if (!billingClient.isReady) {
+            Toast.makeText(this, "Billing Client is not ready", Toast.LENGTH_SHORT).show()
+            return
+        }
+
         val productDetailsParams = QueryProductDetailsParams.newBuilder()
             .setProductList(
                 listOf(
@@ -70,11 +123,18 @@ class MainActivity : ComponentActivity(), PurchasesUpdatedListener {
                         .setProductType(BillingClient.ProductType.INAPP)
                         .build()
                 )
-            ).build()
+            )
+            .build()
 
-        billingClient.queryProductDetailsAsync(productDetailsParams) { billingResult, productDetailsList ->
-            if (billingResult.responseCode == BillingClient.BillingResponseCode.OK && productDetailsList.isNotEmpty()) {
-                val productDetails = productDetailsList[0] // Assume one product with this ID
+        billingClient.queryProductDetailsAsync(productDetailsParams) { billingResult, queryProductDetailsResult ->
+            val productDetailsList = queryProductDetailsResult.productDetailsList
+
+            if (
+                billingResult.responseCode == BillingClient.BillingResponseCode.OK &&
+                productDetailsList.isNotEmpty()
+            ) {
+                val productDetails = productDetailsList.first()
+
                 val billingFlowParams = BillingFlowParams.newBuilder()
                     .setProductDetailsParamsList(
                         listOf(
@@ -84,16 +144,24 @@ class MainActivity : ComponentActivity(), PurchasesUpdatedListener {
                         )
                     )
                     .build()
+
                 billingClient.launchBillingFlow(this, billingFlowParams)
             } else {
-                Toast.makeText(this, "Product not found or error: ${billingResult.debugMessage}", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    this,
+                    "Product not found or error: ${billingResult.debugMessage}",
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         }
     }
 
-    override fun onPurchasesUpdated(billingResult: BillingResult, purchases: MutableList<Purchase>?) {
+    override fun onPurchasesUpdated(
+        billingResult: BillingResult,
+        purchases: MutableList<Purchase>?
+    ) {
         if (billingResult.responseCode == BillingClient.BillingResponseCode.OK && purchases != null) {
-            for (purchase in purchases) {
+            purchases.forEach { purchase ->
                 handlePurchase(purchase)
             }
         } else if (billingResult.responseCode == BillingClient.BillingResponseCode.USER_CANCELED) {
@@ -105,17 +173,19 @@ class MainActivity : ComponentActivity(), PurchasesUpdatedListener {
 
     private fun handlePurchase(purchase: Purchase) {
         if (purchase.purchaseState == Purchase.PurchaseState.PURCHASED) {
-            if (!purchase.isAcknowledged) {
-                val acknowledgePurchaseParams = AcknowledgePurchaseParams.newBuilder()
-                    .setPurchaseToken(purchase.purchaseToken)
-                    .build()
+            val consumeParams = ConsumeParams.newBuilder()
+                .setPurchaseToken(purchase.purchaseToken)
+                .build()
 
-                billingClient.acknowledgePurchase(acknowledgePurchaseParams) { billingResult ->
-                    if (billingResult.responseCode == BillingClient.BillingResponseCode.OK) {
-                        Toast.makeText(this, "Purchase acknowledged", Toast.LENGTH_SHORT).show()
-                    } else {
-                        Toast.makeText(this, "Failed to acknowledge purchase", Toast.LENGTH_SHORT).show()
-                    }
+            billingClient.consumeAsync(consumeParams) { billingResult, _ ->
+                if (billingResult.responseCode == BillingClient.BillingResponseCode.OK) {
+                    Toast.makeText(this, "Purchase consumed. You can buy it again.", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(
+                        this,
+                        "Failed to consume purchase: ${billingResult.debugMessage}",
+                        Toast.LENGTH_SHORT
+                    ).show()
                 }
             }
         }
@@ -123,7 +193,11 @@ class MainActivity : ComponentActivity(), PurchasesUpdatedListener {
 }
 
 @Composable
-fun MainContent(modifier: Modifier = Modifier, onBuyButtonClick: () -> Unit) {
+fun MainContent(
+    modifier: Modifier = Modifier,
+    affiliateData: MutableState<GoMarketMeAffiliateMarketingData?>,
+    onBuyButtonClick: () -> Unit
+) {
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -131,7 +205,21 @@ fun MainContent(modifier: Modifier = Modifier, onBuyButtonClick: () -> Unit) {
         verticalArrangement = Arrangement.Center
     ) {
         Greeting(name = "Android")
+
         Spacer(modifier = Modifier.height(16.dp))
+
+        val data = affiliateData.value
+
+        if (data != null) {
+            Text(text = "Affiliate ID: ${data.affiliate.id}")
+            Text(text = "Affiliate %: ${data.saleDistribution.affiliatePercentage}")
+            Text(text = "Campaign ID: ${data.campaign.id}")
+        } else {
+            Text(text = "No affiliate marketing data found yet")
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
         Button(onClick = onBuyButtonClick) {
             Text(text = "Buy Product")
         }
@@ -141,7 +229,7 @@ fun MainContent(modifier: Modifier = Modifier, onBuyButtonClick: () -> Unit) {
 @Composable
 fun Greeting(name: String, modifier: Modifier = Modifier) {
     Text(
-        text = "Hello $name!",
+        text = "Hello GoMarketMe SDK v.4.0.1!",
         modifier = modifier
     )
 }
@@ -150,6 +238,11 @@ fun Greeting(name: String, modifier: Modifier = Modifier) {
 @Composable
 fun MainContentPreview() {
     KotlinSampleAppTheme {
-        MainContent(onBuyButtonClick = {})
+        MainContent(
+            affiliateData = remember {
+                mutableStateOf(null)
+            },
+            onBuyButtonClick = {}
+        )
     }
 }
