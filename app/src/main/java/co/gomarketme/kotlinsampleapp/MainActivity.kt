@@ -22,10 +22,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.lifecycleScope
 import co.gomarketme.kotlin.GoMarketMe
 import co.gomarketme.kotlin.GoMarketMeAffiliateMarketingData
 import co.gomarketme.kotlinsampleapp.ui.theme.KotlinSampleAppTheme
-import com.android.billingclient.api.AcknowledgePurchaseParams
 import com.android.billingclient.api.BillingClient
 import com.android.billingclient.api.BillingClientStateListener
 import com.android.billingclient.api.BillingFlowParams
@@ -36,16 +36,18 @@ import com.android.billingclient.api.Purchase
 import com.android.billingclient.api.PurchasesUpdatedListener
 import com.android.billingclient.api.QueryProductDetailsParams
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity(), PurchasesUpdatedListener {
     private lateinit var billingClient: BillingClient
+    private val goMarketMeSDK = GoMarketMe
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         // Initialize GoMarketMe SDK.
         // Replace API_KEY with your actual GoMarketMe API key.
-        GoMarketMe.initialize(this, "API_KEY")
+        goMarketMeSDK.initialize(this, "API_KEY")
 
         enableEdgeToEdge()
 
@@ -173,20 +175,35 @@ class MainActivity : ComponentActivity(), PurchasesUpdatedListener {
 
     private fun handlePurchase(purchase: Purchase) {
         if (purchase.purchaseState == Purchase.PurchaseState.PURCHASED) {
-            val consumeParams = ConsumeParams.newBuilder()
-                .setPurchaseToken(purchase.purchaseToken)
-                .build()
-
-            billingClient.consumeAsync(consumeParams) { billingResult, _ ->
-                if (billingResult.responseCode == BillingClient.BillingResponseCode.OK) {
-                    Toast.makeText(this, "Purchase consumed. You can buy it again.", Toast.LENGTH_SHORT).show()
-                } else {
+            lifecycleScope.launch {
+                try {
+                    goMarketMeSDK.syncAllTransactions()
+                    consumePurchase(purchase)
+                } catch (throwable: Throwable) {
                     Toast.makeText(
-                        this,
-                        "Failed to consume purchase: ${billingResult.debugMessage}",
+                        this@MainActivity,
+                        "Failed to sync purchase: ${throwable.message}",
                         Toast.LENGTH_SHORT
                     ).show()
                 }
+            }
+        }
+    }
+
+    private fun consumePurchase(purchase: Purchase) {
+        val consumeParams = ConsumeParams.newBuilder()
+            .setPurchaseToken(purchase.purchaseToken)
+            .build()
+
+        billingClient.consumeAsync(consumeParams) { billingResult, _ ->
+            if (billingResult.responseCode == BillingClient.BillingResponseCode.OK) {
+                Toast.makeText(this, "Purchase consumed. You can buy it again.", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(
+                    this,
+                    "Failed to consume purchase: ${billingResult.debugMessage}",
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         }
     }
@@ -229,7 +246,7 @@ fun MainContent(
 @Composable
 fun Greeting(name: String, modifier: Modifier = Modifier) {
     Text(
-        text = "Hello GoMarketMe SDK v.4.0.1!",
+        text = "Hello GoMarketMe SDK v.5.0.0!",
         modifier = modifier
     )
 }
