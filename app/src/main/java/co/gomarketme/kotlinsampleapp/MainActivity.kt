@@ -246,7 +246,7 @@ fun MainContent(
 @Composable
 fun Greeting(name: String, modifier: Modifier = Modifier) {
     Text(
-        text = "Hello GoMarketMe SDK v.5.0.0!",
+        text = "Hello GoMarketMe SDK v.5.0.1!",
         modifier = modifier
     )
 }

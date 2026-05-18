@@ -16,8 +16,8 @@ extensions.configure<ApplicationExtension>("android") {
         applicationId = "co.gomarketme.kotlinSdkSampleApp"
         minSdk = 24
         targetSdk = 37
-        versionCode = 7
-        versionName = "5.0.0"
+        versionCode = 8
+        versionName = "5.0.1"
     }
 
     signingConfigs {
@@ -76,5 +76,5 @@ dependencies {
     implementation("androidx.compose.ui:ui-test-manifest:1.5.2")
 
     implementation("com.android.billingclient:billing:8.3.0")
-    implementation("com.github.GoMarketMe:gomarketme-kotlin:5.0.0")
+    implementation("com.github.GoMarketMe:gomarketme-kotlin:5.0.1")
 }
