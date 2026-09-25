@@ -1,30 +1,45 @@
 package co.gomarketme.kotlinsampleapp
 
 import android.os.Bundle
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
 import co.gomarketme.kotlin.GoMarketMe
 import co.gomarketme.kotlin.GoMarketMeAffiliateMarketingData
+import co.gomarketme.kotlin.GoMarketMeReferralCodeTrigger
 import co.gomarketme.kotlinsampleapp.ui.theme.KotlinSampleAppTheme
 import com.android.billingclient.api.BillingClient
 import com.android.billingclient.api.BillingClientStateListener
@@ -35,22 +50,82 @@ import com.android.billingclient.api.PendingPurchasesParams
 import com.android.billingclient.api.Purchase
 import com.android.billingclient.api.PurchasesUpdatedListener
 import com.android.billingclient.api.QueryProductDetailsParams
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity(), PurchasesUpdatedListener {
     private lateinit var billingClient: BillingClient
-    private val goMarketMeSDK = GoMarketMe
+    private val goMarketMe = GoMarketMe
+
+    private var affiliateData by mutableStateOf<GoMarketMeAffiliateMarketingData?>(null)
+    private var sdkReady by mutableStateOf(false)
+    private var sdkError by mutableStateOf<String?>(null)
+    private var billingReady by mutableStateOf(false)
+    private var isSyncing by mutableStateOf(false)
+    private var isPurchasing by mutableStateOf(false)
+    private var syncMessage by mutableStateOf<SampleMessage?>(null)
+    private var purchaseMessage by mutableStateOf<SampleMessage?>(null)
+    private var referralMessage by mutableStateOf<SampleMessage?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        // Initialize GoMarketMe SDK.
-        // Replace API_KEY with your actual GoMarketMe API key.
-        goMarketMeSDK.initialize(this, "API_KEY")
-
         enableEdgeToEdge()
 
+        // Required: initialize once when the app starts.
+        goMarketMe.initialize(this, "API_KEY")
+        observeGoMarketMeInitialization()
+        initializeBilling()
+
+        setContent {
+            KotlinSampleAppTheme {
+                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
+                    MainContent(
+                        modifier = Modifier.padding(innerPadding),
+                        affiliateData = affiliateData,
+                        sdkReady = sdkReady,
+                        sdkError = sdkError,
+                        billingReady = billingReady,
+                        isSyncing = isSyncing,
+                        isPurchasing = isPurchasing,
+                        syncMessage = syncMessage,
+                        purchaseMessage = purchaseMessage,
+                        referralMessage = referralMessage,
+                        onReferralResult = { data ->
+                            if (data != null) {
+                                affiliateData = data
+                                referralMessage = data.referralCode.nonEmpty()?.let {
+                                    SampleMessage.success("Referral code $it applied.")
+                                } ?: SampleMessage.info(
+                                    "This device is already attributed through an affiliate link."
+                                )
+                            }
+                        },
+                        onReferralError = { error ->
+                            referralMessage = SampleMessage.error(
+                                error.message ?: "Could not open referral codes."
+                            )
+                        },
+                        onSyncClick = ::syncCurrentPurchases,
+                        onBuyButtonClick = { initiatePurchase(TEST_PRODUCT_ID) }
+                    )
+                }
+            }
+        }
+    }
+
+    private fun observeGoMarketMeInitialization() {
+        lifecycleScope.launch {
+            try {
+                // This call waits for SDK initialization. The trigger uses the same settings.
+                goMarketMe.referralCodeSettings()
+                affiliateData = goMarketMe.affiliateMarketingData
+                sdkReady = true
+            } catch (error: Throwable) {
+                sdkError = error.message ?: "GoMarketMe could not initialize."
+            }
+        }
+    }
+
+    private fun initializeBilling() {
         billingClient = BillingClient.newBuilder(this)
             .setListener(this)
             .enablePendingPurchases(
@@ -63,59 +138,54 @@ class MainActivity : ComponentActivity(), PurchasesUpdatedListener {
 
         billingClient.startConnection(object : BillingClientStateListener {
             override fun onBillingSetupFinished(billingResult: BillingResult) {
-                if (billingResult.responseCode == BillingClient.BillingResponseCode.OK) {
-                    Toast.makeText(
-                        this@MainActivity,
-                        "Billing Client Ready",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                } else {
-                    Toast.makeText(
-                        this@MainActivity,
-                        "Error: ${billingResult.debugMessage}",
-                        Toast.LENGTH_SHORT
-                    ).show()
+                billingReady = billingResult.responseCode == BillingClient.BillingResponseCode.OK
+                if (!billingReady) {
+                    purchaseMessage = SampleMessage.error(billingResult.debugMessage)
                 }
             }
 
             override fun onBillingServiceDisconnected() {
-                Toast.makeText(
-                    this@MainActivity,
-                    "Billing Client Disconnected",
-                    Toast.LENGTH_SHORT
-                ).show()
+                billingReady = false
+                purchaseMessage = SampleMessage.info("Google Play Billing disconnected.")
             }
         })
+    }
 
-        setContent {
-            KotlinSampleAppTheme {
-                val affiliateData = remember {
-                    mutableStateOf<GoMarketMeAffiliateMarketingData?>(null)
-                }
+    private fun syncCurrentPurchases() {
+        if (!sdkReady || isSyncing) return
 
-                LaunchedEffect(Unit) {
-                    // GoMarketMe.initialize(...) runs asynchronously.
-                    // For this sample app, wait briefly before reading the data.
-                    delay(3000)
-                    affiliateData.value = GoMarketMe.affiliateMarketingData
-                }
-
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    MainContent(
-                        modifier = Modifier.padding(innerPadding),
-                        affiliateData = affiliateData,
-                        onBuyButtonClick = { initiatePurchase("productid4") }
+        isSyncing = true
+        syncMessage = null
+        lifecycleScope.launch {
+            try {
+                val result = goMarketMe.syncAllTransactions()
+                syncMessage = if (result.success) {
+                    SampleMessage.success(
+                        "Synced ${result.sentCount} of ${result.fetchedCount} transaction(s)."
+                    )
+                } else {
+                    SampleMessage.error(
+                        "Sync did not complete. ${result.failedCount} transaction(s) failed."
                     )
                 }
+            } catch (error: Throwable) {
+                syncMessage = SampleMessage.error(
+                    error.message ?: "Purchase sync failed."
+                )
+            } finally {
+                isSyncing = false
             }
         }
     }
 
     private fun initiatePurchase(productId: String) {
         if (!billingClient.isReady) {
-            Toast.makeText(this, "Billing Client is not ready", Toast.LENGTH_SHORT).show()
+            purchaseMessage = SampleMessage.info("Google Play Billing is not ready.")
             return
         }
+
+        isPurchasing = true
+        purchaseMessage = null
 
         val productDetailsParams = QueryProductDetailsParams.newBuilder()
             .setProductList(
@@ -128,32 +198,24 @@ class MainActivity : ComponentActivity(), PurchasesUpdatedListener {
             )
             .build()
 
-        billingClient.queryProductDetailsAsync(productDetailsParams) { billingResult, queryProductDetailsResult ->
-            val productDetailsList = queryProductDetailsResult.productDetailsList
-
-            if (
-                billingResult.responseCode == BillingClient.BillingResponseCode.OK &&
-                productDetailsList.isNotEmpty()
-            ) {
-                val productDetails = productDetailsList.first()
-
-                val billingFlowParams = BillingFlowParams.newBuilder()
+        billingClient.queryProductDetailsAsync(productDetailsParams) { result, response ->
+            val products = response.productDetailsList
+            if (result.responseCode == BillingClient.BillingResponseCode.OK && products.isNotEmpty()) {
+                val flowParams = BillingFlowParams.newBuilder()
                     .setProductDetailsParamsList(
                         listOf(
                             BillingFlowParams.ProductDetailsParams.newBuilder()
-                                .setProductDetails(productDetails)
+                                .setProductDetails(products.first())
                                 .build()
                         )
                     )
                     .build()
-
-                billingClient.launchBillingFlow(this, billingFlowParams)
+                billingClient.launchBillingFlow(this, flowParams)
             } else {
-                Toast.makeText(
-                    this,
-                    "Product not found or error: ${billingResult.debugMessage}",
-                    Toast.LENGTH_SHORT
-                ).show()
+                isPurchasing = false
+                purchaseMessage = SampleMessage.error(
+                    "Test product unavailable: ${result.debugMessage}"
+                )
             }
         }
     }
@@ -162,103 +224,385 @@ class MainActivity : ComponentActivity(), PurchasesUpdatedListener {
         billingResult: BillingResult,
         purchases: MutableList<Purchase>?
     ) {
-        if (billingResult.responseCode == BillingClient.BillingResponseCode.OK && purchases != null) {
-            purchases.forEach { purchase ->
-                handlePurchase(purchase)
+        when (billingResult.responseCode) {
+            BillingClient.BillingResponseCode.OK -> purchases?.forEach(::handlePurchase)
+            BillingClient.BillingResponseCode.USER_CANCELED -> {
+                isPurchasing = false
+                purchaseMessage = SampleMessage.info("Purchase cancelled.")
             }
-        } else if (billingResult.responseCode == BillingClient.BillingResponseCode.USER_CANCELED) {
-            Toast.makeText(this, "Purchase canceled", Toast.LENGTH_SHORT).show()
-        } else {
-            Toast.makeText(this, "Error: ${billingResult.debugMessage}", Toast.LENGTH_SHORT).show()
+            else -> {
+                isPurchasing = false
+                purchaseMessage = SampleMessage.error(billingResult.debugMessage)
+            }
         }
     }
 
     private fun handlePurchase(purchase: Purchase) {
-        if (purchase.purchaseState == Purchase.PurchaseState.PURCHASED) {
-            lifecycleScope.launch {
-                try {
-                    goMarketMeSDK.syncAllTransactions()
-                    consumePurchase(purchase)
-                } catch (throwable: Throwable) {
-                    Toast.makeText(
-                        this@MainActivity,
-                        "Failed to sync purchase: ${throwable.message}",
-                        Toast.LENGTH_SHORT
-                    ).show()
+        if (purchase.purchaseState != Purchase.PurchaseState.PURCHASED) {
+            purchaseMessage = SampleMessage.info("Purchase pending approval.")
+            return
+        }
+
+        lifecycleScope.launch {
+            val synced = try {
+                goMarketMe.syncAllTransactions().success
+            } catch (error: Throwable) {
+                false
+            }
+            consumePurchase(purchase, synced)
+        }
+    }
+
+    private fun consumePurchase(purchase: Purchase, synced: Boolean) {
+        val params = ConsumeParams.newBuilder()
+            .setPurchaseToken(purchase.purchaseToken)
+            .build()
+
+        billingClient.consumeAsync(params) { result, _ ->
+            isPurchasing = false
+            purchaseMessage = if (result.responseCode == BillingClient.BillingResponseCode.OK) {
+                if (synced) {
+                    SampleMessage.success("Purchase completed and synced.")
+                } else {
+                    SampleMessage.error(
+                        "Purchase completed, but GoMarketMe sync needs attention."
+                    )
                 }
+            } else {
+                SampleMessage.error("Could not consume purchase: ${result.debugMessage}")
             }
         }
     }
 
-    private fun consumePurchase(purchase: Purchase) {
-        val consumeParams = ConsumeParams.newBuilder()
-            .setPurchaseToken(purchase.purchaseToken)
-            .build()
-
-        billingClient.consumeAsync(consumeParams) { billingResult, _ ->
-            if (billingResult.responseCode == BillingClient.BillingResponseCode.OK) {
-                Toast.makeText(this, "Purchase consumed. You can buy it again.", Toast.LENGTH_SHORT).show()
-            } else {
-                Toast.makeText(
-                    this,
-                    "Failed to consume purchase: ${billingResult.debugMessage}",
-                    Toast.LENGTH_SHORT
-                ).show()
-            }
-        }
+    companion object {
+        private const val TEST_PRODUCT_ID = "productid4"
     }
 }
 
 @Composable
 fun MainContent(
     modifier: Modifier = Modifier,
-    affiliateData: MutableState<GoMarketMeAffiliateMarketingData?>,
+    affiliateData: GoMarketMeAffiliateMarketingData?,
+    sdkReady: Boolean,
+    sdkError: String?,
+    billingReady: Boolean,
+    isSyncing: Boolean,
+    isPurchasing: Boolean,
+    syncMessage: SampleMessage?,
+    purchaseMessage: SampleMessage?,
+    referralMessage: SampleMessage?,
+    onReferralResult: (GoMarketMeAffiliateMarketingData?) -> Unit,
+    onReferralError: (Throwable) -> Unit,
+    onSyncClick: () -> Unit,
     onBuyButtonClick: () -> Unit
 ) {
-    Column(
+    LazyColumn(
         modifier = modifier
             .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.Center
+            .padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+            top = 20.dp,
+            bottom = 24.dp
+        )
     ) {
-        Greeting(name = "Android")
+        item { SampleHeader() }
 
-        Spacer(modifier = Modifier.height(16.dp))
-
-        val data = affiliateData.value
-
-        if (data != null) {
-            Text(text = "Affiliate ID: ${data.affiliate.id}")
-            Text(text = "Affiliate %: ${data.saleDistribution.affiliatePercentage}")
-            Text(text = "Campaign ID: ${data.campaign.id}")
-        } else {
-            Text(text = "No affiliate marketing data found yet")
+        item {
+            SampleSection(
+                badge = "Required",
+                title = "Initialize",
+                description = "Initialize once when your app starts. Affiliate-link attribution is handled automatically."
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (!sdkReady && sdkError == null) {
+                        CircularProgressIndicator(modifier = Modifier.width(22.dp))
+                    } else {
+                        Text(
+                            text = if (sdkReady) "✓" else "!",
+                            style = MaterialTheme.typography.headlineSmall,
+                            color = if (sdkReady) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.error
+                            }
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        Text(
+                            text = when {
+                                sdkReady -> "SDK ready"
+                                sdkError != null -> "Initialization failed"
+                                else -> "Initializing GoMarketMe…"
+                            },
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = when {
+                                sdkError != null -> sdkError
+                                affiliateData != null -> "Ready · attribution loaded"
+                                sdkReady -> "Ready · no existing attribution"
+                                else -> "Calling GoMarketMe.initialize(context, apiKey)"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        item {
+            SampleSection(
+                badge = "Optional",
+                title = "Referral codes",
+                description = "Referral codes are the fallback when an affiliate link is not practical. Place this UI on the first screen users see after installing the app."
+            ) {
+                GoMarketMeReferralCodeTrigger(
+                    modifier = Modifier.fillMaxWidth(),
+                    onResult = onReferralResult,
+                    onError = onReferralError
+                )
+                referralMessage?.let {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    MessageView(it)
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "The trigger text, colors, typography, and layout are configured in GoMarketMe.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
 
-        Button(onClick = onBuyButtonClick) {
-            Text(text = "Buy Product")
+        item {
+            SampleSection(
+                badge = "Recommended",
+                title = "Report purchases",
+                description = "GoMarketMe detects and reports purchases automatically. We also recommend manually syncing after your purchase provider confirms a successful transaction."
+            ) {
+                Button(
+                    onClick = onSyncClick,
+                    enabled = sdkReady && !isSyncing,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(if (isSyncing) "Syncing…" else "Manually sync purchases")
+                }
+                syncMessage?.let {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    MessageView(it)
+                }
+                HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
+                Text(
+                    text = "Google Play Billing test",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Uses sample product productid4. After purchase, the sample syncs with GoMarketMe before consuming it.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedButton(
+                    onClick = onBuyButtonClick,
+                    enabled = billingReady && !isPurchasing,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(if (isPurchasing) "Purchasing…" else "Buy test product")
+                }
+                purchaseMessage?.let {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    MessageView(it)
+                }
+            }
+        }
+
+        item {
+            SampleSection(
+                badge = "Optional",
+                title = "Programmatic affiliate data",
+                description = "Use the initialization response to personalize onboarding, paywalls, offers, or other app content."
+            ) {
+                if (affiliateData == null) {
+                    MessageView(
+                        SampleMessage.info(
+                            "No attribution is active. Referral codes remain available as a fallback."
+                        )
+                    )
+                } else {
+                    AffiliateDataView(affiliateData)
+                }
+            }
         }
     }
 }
 
 @Composable
-fun Greeting(name: String, modifier: Modifier = Modifier) {
-    Text(
-        text = "Hello GoMarketMe SDK v.5.0.2!",
-        modifier = modifier
-    )
+private fun SampleHeader() {
+    Column {
+        Text(
+            text = "GoMarketMe Kotlin SDK",
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Text(
+            text = "Sample integration · SDK 6.0.0",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
 }
+
+@Composable
+private fun SampleSection(
+    badge: String,
+    title: String,
+    description: String,
+    content: @Composable () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer
+        ),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(modifier = Modifier.padding(18.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Surface(
+                    color = MaterialTheme.colorScheme.primary,
+                    shape = RoundedCornerShape(100.dp)
+                ) {
+                    Text(
+                        text = badge,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            content()
+        }
+    }
+}
+
+@Composable
+private fun AffiliateDataView(data: GoMarketMeAffiliateMarketingData) {
+    val referralCode = data.referralCode.nonEmpty()
+    Column {
+        KeyValueRow(
+            "Attribution",
+            referralCode?.let { "Referral code ($it)" } ?: "Affiliate link"
+        )
+        KeyValueRow("Affiliate ID", data.affiliate.id)
+        KeyValueRow("Campaign ID", data.campaign.id)
+        KeyValueRow(
+            "Affiliate share",
+            data.saleDistribution.affiliatePercentage.nonEmpty()?.let { "$it%" } ?: "—"
+        )
+        KeyValueRow("Referral code", referralCode ?: "—")
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "This device is attributed. A referral code cannot replace the existing attribution.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+private fun KeyValueRow(label: String, value: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.weight(1f),
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Text(
+            text = value.ifBlank { "—" },
+            modifier = Modifier.weight(1f),
+            textAlign = TextAlign.End,
+            fontFamily = FontFamily.Monospace
+        )
+    }
+}
+
+enum class MessageKind { Info, Success, Error }
+
+data class SampleMessage(val kind: MessageKind, val text: String) {
+    companion object {
+        fun info(text: String) = SampleMessage(MessageKind.Info, text)
+        fun success(text: String) = SampleMessage(MessageKind.Success, text)
+        fun error(text: String) = SampleMessage(MessageKind.Error, text)
+    }
+}
+
+@Composable
+private fun MessageView(message: SampleMessage) {
+    val color = when (message.kind) {
+        MessageKind.Info -> MaterialTheme.colorScheme.primary
+        MessageKind.Success -> MaterialTheme.colorScheme.tertiary
+        MessageKind.Error -> MaterialTheme.colorScheme.error
+    }
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = color.copy(alpha = 0.1f),
+        shape = RoundedCornerShape(10.dp)
+    ) {
+        Text(
+            text = message.text,
+            modifier = Modifier.padding(10.dp),
+            color = color,
+            style = MaterialTheme.typography.bodySmall
+        )
+    }
+}
+
+private fun String?.nonEmpty(): String? = this?.trim()?.takeIf { it.isNotEmpty() }
 
 @Preview(showBackground = true)
 @Composable
 fun MainContentPreview() {
     KotlinSampleAppTheme {
         MainContent(
-            affiliateData = remember {
-                mutableStateOf(null)
-            },
+            affiliateData = null,
+            sdkReady = true,
+            sdkError = null,
+            billingReady = true,
+            isSyncing = false,
+            isPurchasing = false,
+            syncMessage = null,
+            purchaseMessage = null,
+            referralMessage = null,
+            onReferralResult = {},
+            onReferralError = {},
+            onSyncClick = {},
             onBuyButtonClick = {}
         )
     }
