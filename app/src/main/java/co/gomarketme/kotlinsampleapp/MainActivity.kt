@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -22,6 +23,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -31,6 +33,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -39,6 +42,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
 import co.gomarketme.kotlin.GoMarketMe
 import co.gomarketme.kotlin.GoMarketMeAffiliateMarketingData
+import co.gomarketme.kotlin.GoMarketMeReferralCodeErrorCode
+import co.gomarketme.kotlin.GoMarketMeReferralCodeException
 import co.gomarketme.kotlin.GoMarketMeReferralCodeTrigger
 import co.gomarketme.kotlinsampleapp.ui.theme.KotlinSampleAppTheme
 import com.android.billingclient.api.BillingClient
@@ -51,6 +56,7 @@ import com.android.billingclient.api.Purchase
 import com.android.billingclient.api.PurchasesUpdatedListener
 import com.android.billingclient.api.QueryProductDetailsParams
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 
 class MainActivity : ComponentActivity(), PurchasesUpdatedListener {
     private lateinit var billingClient: BillingClient
@@ -65,6 +71,8 @@ class MainActivity : ComponentActivity(), PurchasesUpdatedListener {
     private var syncMessage by mutableStateOf<SampleMessage?>(null)
     private var purchaseMessage by mutableStateOf<SampleMessage?>(null)
     private var referralMessage by mutableStateOf<SampleMessage?>(null)
+    private var referralCodeInput by mutableStateOf("")
+    private var isRedeemingReferralCode by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -89,6 +97,8 @@ class MainActivity : ComponentActivity(), PurchasesUpdatedListener {
                         syncMessage = syncMessage,
                         purchaseMessage = purchaseMessage,
                         referralMessage = referralMessage,
+                        referralCodeInput = referralCodeInput,
+                        isRedeemingReferralCode = isRedeemingReferralCode,
                         onReferralResult = { data ->
                             if (data != null) {
                                 affiliateData = data
@@ -104,6 +114,8 @@ class MainActivity : ComponentActivity(), PurchasesUpdatedListener {
                                 error.message ?: "Could not open referral codes."
                             )
                         },
+                        onReferralCodeChange = { referralCodeInput = it },
+                        onRedeemReferralCode = ::redeemReferralCode,
                         onSyncClick = ::syncCurrentPurchases,
                         onBuyButtonClick = { initiatePurchase(TEST_PRODUCT_ID) }
                     )
@@ -174,6 +186,30 @@ class MainActivity : ComponentActivity(), PurchasesUpdatedListener {
                 )
             } finally {
                 isSyncing = false
+            }
+        }
+    }
+
+    private fun redeemReferralCode() {
+        val code = referralCodeInput.trim()
+        if (!sdkReady || code.isEmpty() || isRedeemingReferralCode) return
+        isRedeemingReferralCode = true
+        lifecycleScope.launch {
+            try {
+                val data = goMarketMe.redeemReferralCode(code)
+                affiliateData = data
+                referralCodeInput = ""
+                referralMessage = SampleMessage.success(
+                    "Referral code ${data.referralCode.nonEmpty() ?: code} applied."
+                )
+            } catch (error: GoMarketMeReferralCodeException) {
+                referralMessage = SampleMessage.error(referralErrorMessage(error))
+            } catch (error: Throwable) {
+                referralMessage = SampleMessage.error(
+                    error.message ?: "Could not apply referral code."
+                )
+            } finally {
+                isRedeemingReferralCode = false
             }
         }
     }
@@ -291,8 +327,12 @@ fun MainContent(
     syncMessage: SampleMessage?,
     purchaseMessage: SampleMessage?,
     referralMessage: SampleMessage?,
+    referralCodeInput: String,
+    isRedeemingReferralCode: Boolean,
     onReferralResult: (GoMarketMeAffiliateMarketingData?) -> Unit,
     onReferralError: (Throwable) -> Unit,
+    onReferralCodeChange: (String) -> Unit,
+    onRedeemReferralCode: () -> Unit,
     onSyncClick: () -> Unit,
     onBuyButtonClick: () -> Unit
 ) {
@@ -365,6 +405,28 @@ fun MainContent(
                     onResult = onReferralResult,
                     onError = onReferralError
                 )
+                HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
+                Text(
+                    text = "Custom referral-code UI",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = referralCodeInput,
+                    onValueChange = onReferralCodeChange,
+                    label = { Text("Referral code") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = onRedeemReferralCode,
+                    enabled = sdkReady && referralCodeInput.isNotBlank() && !isRedeemingReferralCode,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(if (isRedeemingReferralCode) "Applying…" else "Apply referral code")
+                }
                 referralMessage?.let {
                     Spacer(modifier = Modifier.height(12.dp))
                     MessageView(it)
@@ -445,14 +507,24 @@ fun MainContent(
 @Composable
 private fun SampleHeader() {
     Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Image(
+                painter = painterResource(R.drawable.gomarketme_logo),
+                contentDescription = "GoMarketMe logo",
+                modifier = Modifier
+                    .width(40.dp)
+                    .height(40.dp)
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Text(
+                text = "GoMarketMe Kotlin SDK",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
         Text(
-            text = "GoMarketMe Kotlin SDK",
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.primary
-        )
-        Text(
-            text = "Sample integration · SDK 6.0.0",
+            text = "Sample integration · SDK 6.0.1",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -516,11 +588,15 @@ private fun AffiliateDataView(data: GoMarketMeAffiliateMarketingData) {
         )
         KeyValueRow("Affiliate ID", data.affiliate.id)
         KeyValueRow("Campaign ID", data.campaign.id)
+        data.deviceId.nonEmpty()?.let { KeyValueRow("Device ID", it) }
         KeyValueRow(
             "Affiliate share",
             data.saleDistribution.affiliatePercentage.nonEmpty()?.let { "$it%" } ?: "—"
         )
         KeyValueRow("Referral code", referralCode ?: "—")
+        KeyValueRow("Campaign metadata", data.campaign.metadata.toJsonString())
+        KeyValueRow("Affiliate metadata", data.affiliate.metadata.toJsonString())
+        KeyValueRow("Affiliate campaign metadata", data.affiliateCampaign.metadata.toJsonString())
         Spacer(modifier = Modifier.height(8.dp))
         Text(
             text = "This device is attributed. A referral code cannot replace the existing attribution.",
@@ -586,6 +662,30 @@ private fun MessageView(message: SampleMessage) {
 
 private fun String?.nonEmpty(): String? = this?.trim()?.takeIf { it.isNotEmpty() }
 
+private fun referralErrorMessage(error: GoMarketMeReferralCodeException): String {
+    return when (error.code) {
+        GoMarketMeReferralCodeErrorCode.InvalidCode ->
+            "That referral code is not valid. Check it and try again."
+        GoMarketMeReferralCodeErrorCode.ExpiredCode ->
+            "That referral code has expired."
+        GoMarketMeReferralCodeErrorCode.InactiveCode ->
+            "That referral code is no longer active."
+        GoMarketMeReferralCodeErrorCode.NetworkError,
+        GoMarketMeReferralCodeErrorCode.Timeout ->
+            "Could not connect. Check your connection and try again."
+        GoMarketMeReferralCodeErrorCode.NotInitialized ->
+            "Referral codes are not ready yet. Please try again."
+        else -> if (error.isRetryable) {
+            "Could not apply the referral code. Please try again."
+        } else {
+            error.message ?: "Could not apply the referral code."
+        }
+    }
+}
+
+private fun Map<String, Any?>.toJsonString(): String =
+    if (isEmpty()) "{}" else JSONObject(this).toString()
+
 @Preview(showBackground = true)
 @Composable
 fun MainContentPreview() {
@@ -600,8 +700,12 @@ fun MainContentPreview() {
             syncMessage = null,
             purchaseMessage = null,
             referralMessage = null,
+            referralCodeInput = "",
+            isRedeemingReferralCode = false,
             onReferralResult = {},
             onReferralError = {},
+            onReferralCodeChange = {},
+            onRedeemReferralCode = {},
             onSyncClick = {},
             onBuyButtonClick = {}
         )
